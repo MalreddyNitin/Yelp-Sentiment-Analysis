@@ -1,4 +1,5 @@
 import streamlit as st
+from unicodedata import normalize as _u
 import requests
 import json
 import re
@@ -59,11 +60,14 @@ def scrape_yelp_reviews(restaurant_name: str, city: str, api_key: str):
     if not results:
         return []
 
-    def _norm(s):
-        return re.sub(r"\s+", " ", str(s)).strip().casefold()
+    def _norm(s: str) -> str:
+        s = _u("NFKD", str(s)).casefold()
+        s = s.replace("’", "'")
+        return re.sub(r"[^a-z0-9]", "", s)
 
+    norm_target = _norm(restaurant_name)
     match = next(
-        (item for item in results if _norm(item.get("title")) == _norm(restaurant_name)),
+        (item for item in results if _norm(item.get("title", "")).startswith(norm_target)),
         None,
     )
     if match is None:

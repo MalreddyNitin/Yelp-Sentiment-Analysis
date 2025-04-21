@@ -4,3 +4,4 @@ nltk==3.8.1
 transformers
 sentencepiece
 torch
+unicodedata
