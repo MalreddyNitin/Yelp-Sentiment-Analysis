@@ -74,7 +74,7 @@ def scrape_yelp_reviews(restaurant_name: str, city: str, api_key: str):
         return []
 
     # ── STEP 2: pull   reviews  ─────────────────────────────────────────
-    reviews, start, page_size = [], 0, 50
+    reviews, start, page_size = [], 0, 49
     while True:
         review_params = {
             "engine": "yelp_reviews",
