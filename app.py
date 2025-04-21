@@ -18,65 +18,91 @@ from nltk.stem import WordNetLemmatizer
 
 
 # ============== 1. SCRAPING (SERPAPI) ===============
-def scrape_yelp_reviews(restaurant_name, city, api_key):
+def scrape_yelp_reviews(restaurant_name: str, city: str, api_key: str):
     """
-    Scrape Yelp reviews for a given restaurant and city using SerpApi.
-    Returns a list of review dictionaries (user_name, comment, rating, feedback).
+    Return a list of dicts: {user_name, comment, rating, feedback}.
+    All network/JSON issues are handled gracefully and we fall back to
+    an empty list (Streamlit will show a friendly message).
     """
-    # 1) Find the place_id by searching with 'find_desc' and 'find_loc'
-    find_params = {
-        "api_key": api_key,
+    # 1️⃣  Search the place first ──────────────────────────────────────────
+    search_params = {
         "engine": "yelp",
         "find_desc": restaurant_name,
-        "find_loc": city
+        "find_loc": city,
+        "api_key": api_key,
     }
 
-    search = requests.get("https://serpapi.com/search", params = find_params)
-    response = search.json()
+    try:
+        r = requests.get("https://serpapi.com/search", params=search_params, timeout=30)
+        r.raise_for_status()
+        data = r.json()
+    except Exception as exc:
+        st.error(f"Failed to reach SerpApi (Yelp search): {exc}")
+        return []                      # ―► Streamlit “no results” path
 
-    restaurant_place_id = next(item["place_ids"][0] for item in response["organic_results"] if item["title"]\
-                              == restaurant_name)
+    # Bail early if SerpApi itself complains (quota, bad params, etc.)
+    if "error" in data:
+        st.error(f"SerpApi error: {data['error']}")
+        return []
 
-    # 2) Paginate over reviews
+    # 2️⃣  Locate the matching business (case‑insensitive) ────────────────
+    results = data.get("organic_results") or data.get("local_results") or []
+    if not results:
+        return []
 
+    def _normalize(s):              # helper for fuzzy title matching
+        return re.sub(r"\s+", " ", s).strip().casefold()
 
-    num = 49
-    start = 0
-    processed_reviews = []
+    match = next(
+        (item for item in results if _normalize(item.get("title", "")) ==
+         _normalize(restaurant_name)),
+        None,
+    )
+    if match is None:
+        return []
 
+    place_id = match.get("place_id")        # new field name
+    if not place_id:
+        place_id = (match.get("place_ids") or [None])[0]  # legacy list
+    if not place_id:
+        return []
+
+    # 3️⃣  Paginate over reviews ──────────────────────────────────────────
+    reviews, start, page_size = [], 0, 50
     while True:
         review_params = {
-            "api_key": api_key,
             "engine": "yelp_reviews",
-            "place_id": restaurant_place_id,
+            "place_id": place_id,
+            "api_key": api_key,
             "start": start,
-            "num": num
+            "num": page_size,
         }
-        search_reviews = requests.get("https://serpapi.com/search", params=review_params)
-        resp = search_reviews.json()
-
-        reviews = resp.get("reviews", [])
-        if not reviews:
+        try:
+            rev_r = requests.get("https://serpapi.com/search", params=review_params, timeout=30)
+            rev_r.raise_for_status()
+            rev_data = rev_r.json()
+        except Exception as exc:
+            st.warning(f"Review page failed at offset {start}: {exc}")
             break
 
-        for r in reviews:
-            user_name = r["user"]["name"]
-            comment_text = r["comment"]["text"]
-            rating = r["rating"]
-            feedback = r["feedback"]
+        batch = rev_data.get("reviews", [])
+        if not batch:
+            break
 
-            processed_reviews.append({
-                "user_name": user_name,
-                "comment": comment_text,
-                "rating": rating,
-                "feedback": feedback
+        for r in batch:
+            reviews.append({
+                "user_name":  r["user"]["name"],
+                "comment":    r["comment"]["text"],
+                "rating":     r["rating"],
+                "feedback":   r["feedback"],
             })
 
-        if len(reviews) < num:
+        if len(batch) < page_size:          # last page
             break
-        start += num
+        start += page_size
 
-    return processed_reviews
+    return reviews
+
 
 
 # ============== 2. DATA CLEANING ===============
